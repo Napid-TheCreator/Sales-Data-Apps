@@ -427,7 +427,7 @@ function renderProducts() {
     card.innerHTML = `
       <div class="product-card-top">
         <span class="product-category-badge ${categoryClass}">${p.kategori}</span>
-        <button class="product-card-delete-btn" data-id="${p.id}" title="Hapus Produk">
+        <button class="product-delete-btn" data-id="${p.id}" title="Hapus Produk">
           <i data-lucide="trash-2" style="width:16px; height:16px;"></i>
         </button>
       </div>
@@ -453,8 +453,8 @@ function renderProducts() {
 }
 
 function bindProductCardEvents() {
-  // Delete handler
-  document.querySelectorAll('.product-card-delete-btn').forEach(btn => {
+  // Delete handler (restricted to #products-list to prevent binding transaction buttons)
+  document.querySelectorAll('#products-list .product-delete-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       const id = btn.getAttribute('data-id');
@@ -472,7 +472,7 @@ function bindProductCardEvents() {
   });
 
   // Edit handler
-  document.querySelectorAll('.product-edit-btn').forEach(btn => {
+  document.querySelectorAll('#products-list .product-edit-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       const id = btn.getAttribute('data-id');
@@ -483,7 +483,7 @@ function bindProductCardEvents() {
   });
 
   // Status toggle handler
-  document.querySelectorAll('.status-toggle-pill').forEach(pill => {
+  document.querySelectorAll('#products-list .status-toggle-pill').forEach(pill => {
     pill.addEventListener('click', (e) => {
       e.stopPropagation();
       const id = pill.getAttribute('data-id');
@@ -503,12 +503,14 @@ function bindProductCardEvents() {
         // Change from Sold back to Ready
         product.status = 'Ready';
         
-        // Cari dan hapus transaksi otomatis terkait penjualan produk ini
-        const origLength = state.transactions.length;
-        state.transactions = state.transactions.filter(t => 
-          !(t.tipe === 'Masuk' && t.keterangan === `Penjualan ${product.nama}`)
-        );
-        const removedCount = origLength - state.transactions.length;
+        // Remove associated transaction to revert balance
+        const initialCount = state.transactions.length;
+        state.transactions = state.transactions.filter(t => {
+          const isLinked = t.produkId === product.id;
+          const isMatchingDesc = t.keterangan === `Penjualan ${product.nama}` && t.tipe === 'Masuk' && t.nominal === product.harga;
+          return !(isLinked || isMatchingDesc);
+        });
+        const removedCount = initialCount - state.transactions.length;
 
         saveToLocalStorage();
         renderProducts();
@@ -517,9 +519,9 @@ function bindProductCardEvents() {
         renderCharts();
         
         if (removedCount > 0) {
-          showToast(`Status kembali Ready & ${removedCount} transaksi penjualan terkait dihapus`, 'check');
+          showToast(`Status "${product.nama}" kembali ke Ready & transaksi dihapus`, 'check');
         } else {
-          showToast(`Status "${product.nama}" diubah ke Ready`, 'check');
+          showToast(`Status "${product.nama}" kembali ke Ready`, 'check');
         }
       }
     });
@@ -548,13 +550,14 @@ function initAutoSaleDialog() {
       // 1. Update Product status
       pendingSoldProduct.status = 'Sold';
       
-      // 2. Create dynamic Pemasukan transaction
+      // 2. Create dynamic Pemasukan transaction with reference
       const newTransaction = {
         id: 't_' + Date.now(),
         tipe: 'Masuk',
         nominal: pendingSoldProduct.harga,
         keterangan: `Penjualan ${pendingSoldProduct.nama}`,
-        tanggal: new Date().toISOString().split('T')[0]
+        tanggal: new Date().toISOString().split('T')[0],
+        produkId: pendingSoldProduct.id
       };
       
       state.transactions.unshift(newTransaction);
@@ -577,6 +580,7 @@ function openProductModal(product = null) {
   const modal = document.getElementById('modal-produk');
   const title = document.getElementById('modal-produk-title');
   const form = document.getElementById('form-produk');
+  const hargaInput = document.getElementById('produk-harga');
   
   form.reset();
 
@@ -584,24 +588,25 @@ function openProductModal(product = null) {
     title.textContent = 'Edit Informasi Produk';
     document.getElementById('produk-id').value = product.id;
     document.getElementById('produk-nama').value = product.nama;
-    document.getElementById('produk-harga').value = product.harga;
+    hargaInput.value = product.harga;
     document.getElementById('produk-kategori').value = product.kategori;
     document.getElementById('produk-status').value = product.status;
-
-    // Lock price input if product status is already Sold
+    
+    // Disable price input if status is Sold
     if (product.status === 'Sold') {
-      document.getElementById('produk-harga').disabled = true;
-      document.getElementById('produk-harga').title = "Harga tidak dapat diubah setelah barang terjual";
+      hargaInput.disabled = true;
+      hargaInput.title = 'Harga produk yang sudah terjual tidak dapat diubah';
     } else {
-      document.getElementById('produk-harga').disabled = false;
-      document.getElementById('produk-harga').removeAttribute('title');
+      hargaInput.disabled = false;
+      hargaInput.title = '';
     }
   } else {
     title.textContent = 'Tambah Produk Baru';
     document.getElementById('produk-id').value = '';
     document.getElementById('produk-status').value = 'Ready';
-    document.getElementById('produk-harga').disabled = false;
-    document.getElementById('produk-harga').removeAttribute('title');
+    hargaInput.value = '';
+    hargaInput.disabled = false;
+    hargaInput.title = '';
   }
 
   modal.classList.remove('hidden');
@@ -616,18 +621,16 @@ function initProductForm() {
     document.getElementById('modal-produk').classList.add('hidden');
   });
 
-  // Listen to status select change inside product modal
-  document.getElementById('produk-status').addEventListener('change', (e) => {
-    const id = document.getElementById('produk-id').value;
-    // Only lock price if editing an existing product and status is set to Sold
-    if (id) {
-      const isSold = e.target.value === 'Sold';
-      document.getElementById('produk-harga').disabled = isSold;
-      if (isSold) {
-        document.getElementById('produk-harga').title = "Harga tidak dapat diubah setelah barang terjual";
-      } else {
-        document.getElementById('produk-harga').removeAttribute('title');
-      }
+  // Dynamic disabling of price input based on modal status select
+  const statusSelect = document.getElementById('produk-status');
+  const hargaInput = document.getElementById('produk-harga');
+  statusSelect.addEventListener('change', () => {
+    if (statusSelect.value === 'Sold') {
+      hargaInput.disabled = true;
+      hargaInput.title = 'Harga produk yang sudah terjual tidak dapat diubah';
+    } else {
+      hargaInput.disabled = false;
+      hargaInput.title = '';
     }
   });
 
@@ -645,6 +648,29 @@ function initProductForm() {
       // Edit mode
       const index = state.products.findIndex(p => p.id === id);
       if (index !== -1) {
+        const oldProduct = state.products[index];
+        const statusChanged = oldProduct.status !== status;
+
+        // If changed from Sold to Ready, remove transaction
+        if (statusChanged && oldProduct.status === 'Sold' && status === 'Ready') {
+          state.transactions = state.transactions.filter(t => {
+            const isLinked = t.produkId === id;
+            const isMatchingDesc = t.keterangan === `Penjualan ${oldProduct.nama}` && t.tipe === 'Masuk' && t.nominal === oldProduct.harga;
+            return !(isLinked || isMatchingDesc);
+          });
+        }
+        // If changed from Ready to Sold, add transaction
+        else if (statusChanged && oldProduct.status === 'Ready' && status === 'Sold') {
+          state.transactions.unshift({
+            id: 't_' + Date.now(),
+            tipe: 'Masuk',
+            nominal: harga,
+            keterangan: `Penjualan ${nama}`,
+            tanggal: new Date().toISOString().split('T')[0],
+            produkId: id
+          });
+        }
+
         state.products[index] = {
           ...state.products[index],
           nama,
@@ -656,20 +682,35 @@ function initProductForm() {
       }
     } else {
       // Create mode
+      const newId = 'p_' + Date.now();
       const newProduct = {
-        id: 'p_' + Date.now(),
+        id: newId,
         nama,
         harga,
         kategori,
         status,
         tanggalInput: new Date().toISOString().split('T')[0]
       };
+      
+      // If product status is initially Sold, add transaction
+      if (status === 'Sold') {
+        state.transactions.unshift({
+          id: 't_' + Date.now(),
+          tipe: 'Masuk',
+          nominal: harga,
+          keterangan: `Penjualan ${nama}`,
+          tanggal: new Date().toISOString().split('T')[0],
+          produkId: newId
+        });
+      }
+      
       state.products.unshift(newProduct);
       showToast('Produk baru ditambahkan ke katalog!', 'plus');
     }
 
     saveToLocalStorage();
     renderProducts();
+    renderTransactions(); // Re-render transactions list to update Arus Kas
     renderDashboardSummary();
     renderCharts();
     
@@ -737,7 +778,7 @@ function renderTransactions() {
         ${amountPrefix} ${formatIDR(t.nominal)}
       </td>
       <td class="text-center">
-        <button class="transaction-delete-btn" data-id="${t.id}" title="Hapus Log">
+        <button class="product-delete-btn delete-trans-btn" data-id="${t.id}" title="Hapus Log">
           <i data-lucide="trash-2" style="width:14px; height:14px;"></i>
         </button>
       </td>
@@ -752,7 +793,7 @@ function renderTransactions() {
 }
 
 function bindTransactionEvents() {
-  document.querySelectorAll('.transaction-delete-btn').forEach(btn => {
+  document.querySelectorAll('.delete-trans-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
       const id = btn.getAttribute('data-id');
       const trans = state.transactions.find(t => t.id === id);

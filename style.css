@@ -585,7 +585,7 @@ body {
 .badge-jaket { background-color: rgba(217, 119, 6, 0.15); color: #fbbf24; }
 .badge-lainnya { background-color: rgba(100, 116, 139, 0.15); color: #cbd5e1; }
 
-.product-card-delete-btn, .transaction-delete-btn {
+.product-delete-btn {
   background: none;
   border: none;
   color: var(--text-muted);
@@ -598,7 +598,7 @@ body {
   transition: var(--transition-smooth);
 }
 
-.product-card-delete-btn:hover, .transaction-delete-btn:hover {
+.product-delete-btn:hover {
   color: var(--color-danger);
   background-color: var(--color-danger-light);
 }
