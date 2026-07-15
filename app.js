@@ -731,7 +731,7 @@ function bindProductCardEvents() {
 
   // Status toggle handler
   document.querySelectorAll('#products-list .status-toggle-pill').forEach(pill => {
-    pill.addEventListener('click', (e) => {
+    pill.addEventListener('click', async (e) => {
       e.stopPropagation();
       const id = pill.getAttribute('data-id');
       const currentStatus = pill.getAttribute('data-status');
