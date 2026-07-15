@@ -1,9 +1,4 @@
 {
-  "functions": {
-    "api/env.js": {
-      "runtime": "@vercel/node"
-    }
-  },
   "headers": [
     {
       "source": "/(.*)",
