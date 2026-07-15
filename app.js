@@ -133,54 +133,64 @@ function loadDemoData() {
  * Muat semua produk dari Supabase
  */
 async function loadProductsFromSupabase() {
-  const { data, error } = await supabaseClient
-    .from('produk')
-    .select('*')
-    .order('tanggal_input', { ascending: false });
+  try {
+    const { data, error } = await supabaseClient
+      .from('produk')
+      .select('*')
+      .order('tanggal_input', { ascending: false });
 
-  if (error) {
-    console.error('[Supabase] Gagal memuat produk:', error);
-    showToast('Gagal memuat data produk dari server', 'alert-triangle');
+    if (error) {
+      console.error('[Supabase] Gagal memuat produk:', error);
+      showToast('Gagal memuat data produk dari server', 'alert-triangle');
+      return false;
+    }
+
+    // Map snake_case Supabase columns → camelCase state
+    state.products = data.map(row => ({
+      id: row.id_produk,
+      nama: row.nama_barang,
+      harga: row.harga_jual,
+      kategori: row.kategori,
+      status: row.status,
+      tanggalInput: row.tanggal_input
+    }));
+    return true;
+  } catch (err) {
+    console.error('[Supabase] Exception saat loadProductsFromSupabase:', err);
     return false;
   }
-
-  // Map snake_case Supabase columns → camelCase state
-  state.products = data.map(row => ({
-    id: row.id_produk,
-    nama: row.nama_barang,
-    harga: row.harga_jual,
-    kategori: row.kategori,
-    status: row.status,
-    tanggalInput: row.tanggal_input
-  }));
-  return true;
 }
 
 /**
  * Muat semua transaksi dari Supabase
  */
 async function loadTransactionsFromSupabase() {
-  const { data, error } = await supabaseClient
-    .from('transaksi')
-    .select('*')
-    .order('tanggal', { ascending: false });
+  try {
+    const { data, error } = await supabaseClient
+      .from('transaksi')
+      .select('*')
+      .order('tanggal', { ascending: false });
 
-  if (error) {
-    console.error('[Supabase] Gagal memuat transaksi:', error);
-    showToast('Gagal memuat data transaksi dari server', 'alert-triangle');
+    if (error) {
+      console.error('[Supabase] Gagal memuat transaksi:', error);
+      showToast('Gagal memuat data transaksi dari server', 'alert-triangle');
+      return false;
+    }
+
+    // Map snake_case → camelCase
+    state.transactions = data.map(row => ({
+      id: row.id_transaksi,
+      tipe: row.tipe,
+      nominal: row.nominal,
+      keterangan: row.keterangan,
+      tanggal: row.tanggal,
+      produkId: row.id_produk || null
+    }));
+    return true;
+  } catch (err) {
+    console.error('[Supabase] Exception saat loadTransactionsFromSupabase:', err);
     return false;
   }
-
-  // Map snake_case → camelCase
-  state.transactions = data.map(row => ({
-    id: row.id_transaksi,
-    tipe: row.tipe,
-    nominal: row.nominal,
-    keterangan: row.keterangan,
-    tanggal: row.tanggal,
-    produkId: row.id_produk || null
-  }));
-  return true;
 }
 
 /**
@@ -1414,9 +1424,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (isSupabaseMode) {
     // 4a. Load data from Supabase
     setLoadingOverlay(true);
-    const produkOK = await loadProductsFromSupabase();
-    const transaksiOK = await loadTransactionsFromSupabase();
-    setLoadingOverlay(false);
+    let produkOK = false;
+    let transaksiOK = false;
+    try {
+      produkOK = await loadProductsFromSupabase();
+      transaksiOK = await loadTransactionsFromSupabase();
+    } catch (err) {
+      console.error('[Supabase] Gagal melakukan fetch data dari Supabase:', err);
+    } finally {
+      setLoadingOverlay(false);
+    }
 
     if (!produkOK || !transaksiOK) {
       // Fallback ke demo data jika Supabase gagal
