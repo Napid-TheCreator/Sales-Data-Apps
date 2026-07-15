@@ -2,7 +2,33 @@
  * Aplikasi Manajemen Inventaris & Keuangan UMKM
  * Core Logic Script (app.js)
  * Developer: Antigravity Pairing Agent 2026
+ * Versi: 2.0 - Supabase Integration
  */
+
+// ==========================================================================
+// SUPABASE CLIENT INITIALIZATION
+// ==========================================================================
+let supabaseClient = null;
+
+function initSupabase() {
+  const supabaseUrl = (window.__env && window.__env.SUPABASE_URL) || '';
+  const supabaseKey = (window.__env && window.__env.SUPABASE_ANON_KEY) || '';
+
+  if (!supabaseUrl || !supabaseKey) {
+    console.warn('[Supabase] Konfigurasi tidak ditemukan. Menggunakan localStorage sebagai fallback.');
+    return false;
+  }
+
+  try {
+    // Supabase JS v2 — createClient tersedia via window.supabase
+    supabaseClient = window.supabase.createClient(supabaseUrl, supabaseKey);
+    console.info('[Supabase] Client berhasil diinisialisasi.');
+    return true;
+  } catch (err) {
+    console.error('[Supabase] Gagal menginisialisasi client:', err);
+    return false;
+  }
+}
 
 // ==========================================================================
 // STATE MANAGEMENT & CONSTANTS
@@ -12,6 +38,8 @@ let state = {
   transactions: [],
   theme: 'dark'
 };
+
+let isSupabaseMode = false; // true jika Supabase aktif, false jika localStorage
 
 // Global chart instances
 let cashflowChartInstance = null;
@@ -79,32 +107,236 @@ function formatDateIndo(dateStr) {
 }
 
 // ==========================================================================
-// DATABASE INTERACTION (localStorage)
+// DATABASE INTERACTION — localStorage (Offline Cache / Fallback)
 // ==========================================================================
-function saveToLocalStorage() {
-  localStorage.setItem('umkm_state', JSON.stringify(state));
+function saveThemeToLocalStorage() {
+  localStorage.setItem('umkm_theme', state.theme);
 }
 
-function loadFromLocalStorage() {
-  const savedState = localStorage.getItem('umkm_state');
-  if (savedState) {
-    try {
-      state = JSON.parse(savedState);
-    } catch (e) {
-      console.error('Error parsing localStorage state:', e);
-      loadDemoData();
-    }
-  } else {
-    loadDemoData();
-  }
+function loadThemeFromLocalStorage() {
+  const savedTheme = localStorage.getItem('umkm_theme');
+  if (savedTheme) state.theme = savedTheme;
 }
 
 function loadDemoData() {
   state.products = [...DEMO_PRODUCTS];
   state.transactions = [...DEMO_TRANSACTIONS];
   state.theme = state.theme || 'dark';
-  saveToLocalStorage();
-  showToast('Data demo berhasil dimuat!', 'refresh-cw');
+  showToast('Data demo berhasil dimuat! (Mode Offline)', 'refresh-cw');
+}
+
+// ==========================================================================
+// DATABASE INTERACTION — Supabase (Primary Database)
+// ==========================================================================
+
+/**
+ * Muat semua produk dari Supabase
+ */
+async function loadProductsFromSupabase() {
+  const { data, error } = await supabaseClient
+    .from('produk')
+    .select('*')
+    .order('tanggal_input', { ascending: false });
+
+  if (error) {
+    console.error('[Supabase] Gagal memuat produk:', error);
+    showToast('Gagal memuat data produk dari server', 'alert-triangle');
+    return false;
+  }
+
+  // Map snake_case Supabase columns → camelCase state
+  state.products = data.map(row => ({
+    id: row.id_produk,
+    nama: row.nama_barang,
+    harga: row.harga_jual,
+    kategori: row.kategori,
+    status: row.status,
+    tanggalInput: row.tanggal_input
+  }));
+  return true;
+}
+
+/**
+ * Muat semua transaksi dari Supabase
+ */
+async function loadTransactionsFromSupabase() {
+  const { data, error } = await supabaseClient
+    .from('transaksi')
+    .select('*')
+    .order('tanggal', { ascending: false });
+
+  if (error) {
+    console.error('[Supabase] Gagal memuat transaksi:', error);
+    showToast('Gagal memuat data transaksi dari server', 'alert-triangle');
+    return false;
+  }
+
+  // Map snake_case → camelCase
+  state.transactions = data.map(row => ({
+    id: row.id_transaksi,
+    tipe: row.tipe,
+    nominal: row.nominal,
+    keterangan: row.keterangan,
+    tanggal: row.tanggal,
+    produkId: row.id_produk || null
+  }));
+  return true;
+}
+
+/**
+ * Upsert (insert atau update) satu produk ke Supabase
+ */
+async function upsertProductToSupabase(product) {
+  const row = {
+    id_produk: product.id,
+    nama_barang: product.nama,
+    harga_jual: product.harga,
+    kategori: product.kategori,
+    status: product.status,
+    tanggal_input: product.tanggalInput
+  };
+
+  const { error } = await supabaseClient
+    .from('produk')
+    .upsert(row, { onConflict: 'id_produk' });
+
+  if (error) {
+    console.error('[Supabase] Gagal menyimpan produk:', error);
+    showToast('Gagal menyimpan produk ke server', 'alert-triangle');
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Hapus produk dari Supabase berdasarkan id
+ */
+async function deleteProductFromSupabase(id) {
+  const { error } = await supabaseClient
+    .from('produk')
+    .delete()
+    .eq('id_produk', id);
+
+  if (error) {
+    console.error('[Supabase] Gagal menghapus produk:', error);
+    showToast('Gagal menghapus produk dari server', 'alert-triangle');
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Insert satu transaksi baru ke Supabase
+ */
+async function insertTransactionToSupabase(transaction) {
+  const row = {
+    id_transaksi: transaction.id,
+    tipe: transaction.tipe,
+    nominal: transaction.nominal,
+    keterangan: transaction.keterangan,
+    tanggal: transaction.tanggal,
+    id_produk: transaction.produkId || null
+  };
+
+  const { error } = await supabaseClient
+    .from('transaksi')
+    .insert(row);
+
+  if (error) {
+    console.error('[Supabase] Gagal menyimpan transaksi:', error);
+    showToast('Gagal menyimpan transaksi ke server', 'alert-triangle');
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Hapus transaksi dari Supabase berdasarkan id
+ */
+async function deleteTransactionFromSupabase(id) {
+  const { error } = await supabaseClient
+    .from('transaksi')
+    .delete()
+    .eq('id_transaksi', id);
+
+  if (error) {
+    console.error('[Supabase] Gagal menghapus transaksi:', error);
+    showToast('Gagal menghapus transaksi dari server', 'alert-triangle');
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Update satu field produk di Supabase (untuk toggle status)
+ */
+async function updateProductStatusInSupabase(id, newStatus) {
+  const { error } = await supabaseClient
+    .from('produk')
+    .update({ status: newStatus })
+    .eq('id_produk', id);
+
+  if (error) {
+    console.error('[Supabase] Gagal update status produk:', error);
+    showToast('Gagal update status ke server', 'alert-triangle');
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Hapus semua transaksi linked ke produk dari Supabase
+ */
+async function deleteTransactionsByProductId(productId) {
+  const { error } = await supabaseClient
+    .from('transaksi')
+    .delete()
+    .eq('id_produk', productId);
+
+  if (error) {
+    console.error('[Supabase] Gagal menghapus transaksi produk:', error);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Helper: render ulang semua UI
+ */
+function refreshAllViews() {
+  renderDashboardSummary();
+  renderProducts();
+  renderTransactions();
+  renderCharts();
+}
+
+/**
+ * Helper: set loading state pada tombol atau seluruh app
+ */
+function setLoadingOverlay(show) {
+  let overlay = document.getElementById('supabase-loading-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'supabase-loading-overlay';
+    overlay.style.cssText = [
+      'position:fixed', 'inset:0', 'z-index:9999',
+      'background:rgba(9,13,22,0.7)', 'display:flex',
+      'align-items:center', 'justify-content:center',
+      'backdrop-filter:blur(4px)', 'transition:opacity 0.3s'
+    ].join(';');
+    overlay.innerHTML = `
+      <div style="text-align:center;color:#a78bfa;font-family:Inter,sans-serif">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          style="animation:spin 1s linear infinite;display:block;margin:0 auto 12px">
+          <path d="M21 12a9 9 0 11-6.219-8.56"/>
+        </svg>
+        <div style="font-size:14px;font-weight:500;opacity:0.8">Menyinkronkan data...</div>
+      </div>
+      <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+    `;
+    document.body.appendChild(overlay);
+  }
+  overlay.style.display = show ? 'flex' : 'none';
 }
 
 // ==========================================================================
@@ -455,17 +687,22 @@ function renderProducts() {
 function bindProductCardEvents() {
   // Delete handler (restricted to #products-list to prevent binding transaction buttons)
   document.querySelectorAll('#products-list .product-delete-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
+    btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const id = btn.getAttribute('data-id');
       const prod = state.products.find(p => p.id === id);
-      
+
       if (confirm(`Apakah Anda yakin ingin menghapus "${prod.nama}" dari katalog?`)) {
-        state.products = state.products.filter(p => p.id !== id);
-        saveToLocalStorage();
-        renderProducts();
-        renderDashboardSummary();
-        renderCharts();
+        if (isSupabaseMode) {
+          setLoadingOverlay(true);
+          await deleteProductFromSupabase(id);
+          await loadProductsFromSupabase();
+          await loadTransactionsFromSupabase();
+          setLoadingOverlay(false);
+        } else {
+          state.products = state.products.filter(p => p.id !== id);
+        }
+        refreshAllViews();
         showToast('Produk berhasil dihapus', 'trash-2');
       }
     });
@@ -495,33 +732,36 @@ function bindProductCardEvents() {
       if (nextStatus === 'Sold') {
         // Trigger smart sale auto-transaction dialog
         pendingSoldProduct = product;
-        
+
         document.getElementById('sale-confirm-name').textContent = product.nama;
         document.getElementById('sale-confirm-price').textContent = formatIDR(product.harga);
         document.getElementById('modal-sale-confirm').classList.remove('hidden');
       } else {
         // Change from Sold back to Ready
-        product.status = 'Ready';
-        
-        // Remove associated transaction to revert balance
-        const initialCount = state.transactions.length;
-        state.transactions = state.transactions.filter(t => {
-          const isLinked = t.produkId === product.id;
-          const isMatchingDesc = t.keterangan === `Penjualan ${product.nama}` && t.tipe === 'Masuk' && t.nominal === product.harga;
-          return !(isLinked || isMatchingDesc);
-        });
-        const removedCount = initialCount - state.transactions.length;
-
-        saveToLocalStorage();
-        renderProducts();
-        renderTransactions();
-        renderDashboardSummary();
-        renderCharts();
-        
-        if (removedCount > 0) {
+        if (isSupabaseMode) {
+          setLoadingOverlay(true);
+          await updateProductStatusInSupabase(product.id, 'Ready');
+          await deleteTransactionsByProductId(product.id);
+          await loadProductsFromSupabase();
+          await loadTransactionsFromSupabase();
+          setLoadingOverlay(false);
+          refreshAllViews();
           showToast(`Status "${product.nama}" kembali ke Ready & transaksi dihapus`, 'check');
         } else {
-          showToast(`Status "${product.nama}" kembali ke Ready`, 'check');
+          product.status = 'Ready';
+          const initialCount = state.transactions.length;
+          state.transactions = state.transactions.filter(t => {
+            const isLinked = t.produkId === product.id;
+            const isMatchingDesc = t.keterangan === `Penjualan ${product.nama}` && t.tipe === 'Masuk' && t.nominal === product.harga;
+            return !(isLinked || isMatchingDesc);
+          });
+          const removedCount = initialCount - state.transactions.length;
+          refreshAllViews();
+          if (removedCount > 0) {
+            showToast(`Status "${product.nama}" kembali ke Ready & transaksi dihapus`, 'check');
+          } else {
+            showToast(`Status "${product.nama}" kembali ke Ready`, 'check');
+          }
         }
       }
     });
@@ -531,13 +771,17 @@ function bindProductCardEvents() {
 // Setup Smart Auto-Transaction Confirmation Listeners
 function initAutoSaleDialog() {
   // Option: Skip recording transaction
-  document.getElementById('btn-sale-skip').addEventListener('click', () => {
+  document.getElementById('btn-sale-skip').addEventListener('click', async () => {
     if (pendingSoldProduct) {
-      pendingSoldProduct.status = 'Sold';
-      saveToLocalStorage();
-      renderProducts();
-      renderDashboardSummary();
-      renderCharts();
+      if (isSupabaseMode) {
+        setLoadingOverlay(true);
+        await updateProductStatusInSupabase(pendingSoldProduct.id, 'Sold');
+        await loadProductsFromSupabase();
+        setLoadingOverlay(false);
+      } else {
+        pendingSoldProduct.status = 'Sold';
+      }
+      refreshAllViews();
       showToast(`"${pendingSoldProduct.nama}" telah terjual!`, 'shopping-bag');
     }
     document.getElementById('modal-sale-confirm').classList.add('hidden');
@@ -545,12 +789,8 @@ function initAutoSaleDialog() {
   });
 
   // Option: Record cash receipt automatically
-  document.getElementById('btn-sale-record').addEventListener('click', () => {
+  document.getElementById('btn-sale-record').addEventListener('click', async () => {
     if (pendingSoldProduct) {
-      // 1. Update Product status
-      pendingSoldProduct.status = 'Sold';
-      
-      // 2. Create dynamic Pemasukan transaction with reference
       const newTransaction = {
         id: 't_' + Date.now(),
         tipe: 'Masuk',
@@ -559,15 +799,20 @@ function initAutoSaleDialog() {
         tanggal: new Date().toISOString().split('T')[0],
         produkId: pendingSoldProduct.id
       };
-      
-      state.transactions.unshift(newTransaction);
-      
-      saveToLocalStorage();
-      renderProducts();
-      renderTransactions();
-      renderDashboardSummary();
-      renderCharts();
-      
+
+      if (isSupabaseMode) {
+        setLoadingOverlay(true);
+        await updateProductStatusInSupabase(pendingSoldProduct.id, 'Sold');
+        await insertTransactionToSupabase(newTransaction);
+        await loadProductsFromSupabase();
+        await loadTransactionsFromSupabase();
+        setLoadingOverlay(false);
+      } else {
+        pendingSoldProduct.status = 'Sold';
+        state.transactions.unshift(newTransaction);
+      }
+
+      refreshAllViews();
       showToast(`Sukses mencatat pemasukan kas ${formatIDR(pendingSoldProduct.harga)}!`, 'trending-up');
     }
     document.getElementById('modal-sale-confirm').classList.add('hidden');
@@ -635,14 +880,15 @@ function initProductForm() {
   });
 
   const form = document.getElementById('form-produk');
-  form.addEventListener('submit', (e) => {
+  form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    
+
     const id = document.getElementById('produk-id').value;
     const nama = document.getElementById('produk-nama').value.trim();
     const harga = parseInt(document.getElementById('produk-harga').value);
     const kategori = document.getElementById('produk-kategori').value;
     const status = document.getElementById('produk-status').value;
+    const tanggalInput = new Date().toISOString().split('T')[0];
 
     if (id) {
       // Edit mode
@@ -650,70 +896,74 @@ function initProductForm() {
       if (index !== -1) {
         const oldProduct = state.products[index];
         const statusChanged = oldProduct.status !== status;
+        const updatedProduct = { ...state.products[index], nama, harga, kategori, status };
 
-        // If changed from Sold to Ready, remove transaction
-        if (statusChanged && oldProduct.status === 'Sold' && status === 'Ready') {
-          state.transactions = state.transactions.filter(t => {
-            const isLinked = t.produkId === id;
-            const isMatchingDesc = t.keterangan === `Penjualan ${oldProduct.nama}` && t.tipe === 'Masuk' && t.nominal === oldProduct.harga;
-            return !(isLinked || isMatchingDesc);
-          });
-        }
-        // If changed from Ready to Sold, add transaction
-        else if (statusChanged && oldProduct.status === 'Ready' && status === 'Sold') {
-          state.transactions.unshift({
-            id: 't_' + Date.now(),
-            tipe: 'Masuk',
-            nominal: harga,
-            keterangan: `Penjualan ${nama}`,
-            tanggal: new Date().toISOString().split('T')[0],
-            produkId: id
-          });
-        }
+        if (isSupabaseMode) {
+          setLoadingOverlay(true);
+          await upsertProductToSupabase(updatedProduct);
 
-        state.products[index] = {
-          ...state.products[index],
-          nama,
-          harga,
-          kategori,
-          status
-        };
+          // Handle status change side effects
+          if (statusChanged && oldProduct.status === 'Sold' && status === 'Ready') {
+            await deleteTransactionsByProductId(id);
+          } else if (statusChanged && oldProduct.status === 'Ready' && status === 'Sold') {
+            await insertTransactionToSupabase({
+              id: 't_' + Date.now(), tipe: 'Masuk', nominal: harga,
+              keterangan: `Penjualan ${nama}`,
+              tanggal: tanggalInput, produkId: id
+            });
+          }
+
+          await loadProductsFromSupabase();
+          await loadTransactionsFromSupabase();
+          setLoadingOverlay(false);
+        } else {
+          if (statusChanged && oldProduct.status === 'Sold' && status === 'Ready') {
+            state.transactions = state.transactions.filter(t => {
+              return !(t.produkId === id || (t.keterangan === `Penjualan ${oldProduct.nama}` && t.tipe === 'Masuk'));
+            });
+          } else if (statusChanged && oldProduct.status === 'Ready' && status === 'Sold') {
+            state.transactions.unshift({
+              id: 't_' + Date.now(), tipe: 'Masuk', nominal: harga,
+              keterangan: `Penjualan ${nama}`,
+              tanggal: tanggalInput, produkId: id
+            });
+          }
+          state.products[index] = updatedProduct;
+        }
         showToast('Informasi produk diperbarui!', 'edit-3');
       }
     } else {
       // Create mode
       const newId = 'p_' + Date.now();
-      const newProduct = {
-        id: newId,
-        nama,
-        harga,
-        kategori,
-        status,
-        tanggalInput: new Date().toISOString().split('T')[0]
-      };
-      
-      // If product status is initially Sold, add transaction
-      if (status === 'Sold') {
-        state.transactions.unshift({
-          id: 't_' + Date.now(),
-          tipe: 'Masuk',
-          nominal: harga,
-          keterangan: `Penjualan ${nama}`,
-          tanggal: new Date().toISOString().split('T')[0],
-          produkId: newId
-        });
+      const newProduct = { id: newId, nama, harga, kategori, status, tanggalInput };
+
+      if (isSupabaseMode) {
+        setLoadingOverlay(true);
+        await upsertProductToSupabase(newProduct);
+        if (status === 'Sold') {
+          await insertTransactionToSupabase({
+            id: 't_' + Date.now(), tipe: 'Masuk', nominal: harga,
+            keterangan: `Penjualan ${nama}`,
+            tanggal: tanggalInput, produkId: newId
+          });
+        }
+        await loadProductsFromSupabase();
+        await loadTransactionsFromSupabase();
+        setLoadingOverlay(false);
+      } else {
+        if (status === 'Sold') {
+          state.transactions.unshift({
+            id: 't_' + Date.now(), tipe: 'Masuk', nominal: harga,
+            keterangan: `Penjualan ${nama}`,
+            tanggal: tanggalInput, produkId: newId
+          });
+        }
+        state.products.unshift(newProduct);
       }
-      
-      state.products.unshift(newProduct);
       showToast('Produk baru ditambahkan ke katalog!', 'plus');
     }
 
-    saveToLocalStorage();
-    renderProducts();
-    renderTransactions(); // Re-render transactions list to update Arus Kas
-    renderDashboardSummary();
-    renderCharts();
-    
+    refreshAllViews();
     document.getElementById('modal-produk').classList.add('hidden');
   });
 
@@ -794,16 +1044,20 @@ function renderTransactions() {
 
 function bindTransactionEvents() {
   document.querySelectorAll('.delete-trans-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
+    btn.addEventListener('click', async (e) => {
       const id = btn.getAttribute('data-id');
       const trans = state.transactions.find(t => t.id === id);
-      
+
       if (confirm(`Apakah Anda yakin ingin menghapus catatan transaksi "${trans.keterangan}"?`)) {
-        state.transactions = state.transactions.filter(t => t.id !== id);
-        saveToLocalStorage();
-        renderTransactions();
-        renderDashboardSummary();
-        renderCharts();
+        if (isSupabaseMode) {
+          setLoadingOverlay(true);
+          await deleteTransactionFromSupabase(id);
+          await loadTransactionsFromSupabase();
+          setLoadingOverlay(false);
+        } else {
+          state.transactions = state.transactions.filter(t => t.id !== id);
+        }
+        refreshAllViews();
         showToast('Log transaksi dihapus', 'trash-2');
       }
     });
@@ -826,7 +1080,7 @@ function initTransactionForm() {
   });
 
   const form = document.getElementById('form-transaksi');
-  form.addEventListener('submit', (e) => {
+  form.addEventListener('submit', async (e) => {
     e.preventDefault();
 
     const tipe = form.querySelector('input[name="transaksi-tipe"]:checked').value;
@@ -839,15 +1093,20 @@ function initTransactionForm() {
       tipe,
       nominal,
       keterangan,
-      tanggal
+      tanggal,
+      produkId: null
     };
 
-    state.transactions.unshift(newTransaction);
-    saveToLocalStorage();
-    renderTransactions();
-    renderDashboardSummary();
-    renderCharts();
+    if (isSupabaseMode) {
+      setLoadingOverlay(true);
+      await insertTransactionToSupabase(newTransaction);
+      await loadTransactionsFromSupabase();
+      setLoadingOverlay(false);
+    } else {
+      state.transactions.unshift(newTransaction);
+    }
 
+    refreshAllViews();
     document.getElementById('modal-transaksi').classList.add('hidden');
     showToast('Transaksi kas baru berhasil dicatat!', 'check');
   });
@@ -1057,33 +1316,55 @@ function parseCSVText(text) {
 function initSettingsActions() {
   // Export button
   document.getElementById('btn-export-csv').addEventListener('click', exportToCSV);
-  
+
   // Import file change listener
   document.getElementById('import-csv-file').addEventListener('change', importFromCSV);
 
   // Load demo button
-  document.getElementById('btn-load-demo').addEventListener('click', () => {
+  document.getElementById('btn-load-demo').addEventListener('click', async () => {
     if (confirm('Muat ulang data demo? Tindakan ini akan menggabungkan/menimpa data demo dengan data saat ini.')) {
-      loadDemoData();
-      renderProducts();
-      renderTransactions();
-      renderDashboardSummary();
-      renderCharts();
+      if (isSupabaseMode) {
+        setLoadingOverlay(true);
+        // Upsert semua produk dan transaksi demo ke Supabase
+        for (const p of DEMO_PRODUCTS) {
+          await upsertProductToSupabase({
+            id: p.id, nama: p.nama, harga: p.harga,
+            kategori: p.kategori, status: p.status, tanggalInput: p.tanggalInput
+          });
+        }
+        for (const t of DEMO_TRANSACTIONS) {
+          await insertTransactionToSupabase({
+            id: t.id, tipe: t.tipe, nominal: t.nominal,
+            keterangan: t.keterangan, tanggal: t.tanggal, produkId: t.produkId || null
+          }).catch(() => {}); // ignore duplicate error
+        }
+        await loadProductsFromSupabase();
+        await loadTransactionsFromSupabase();
+        setLoadingOverlay(false);
+      } else {
+        loadDemoData();
+      }
+      refreshAllViews();
+      showToast('Data demo berhasil dimuat!', 'refresh-cw');
     }
   });
 
   // Reset database button
-  document.getElementById('btn-reset-data').addEventListener('click', () => {
+  document.getElementById('btn-reset-data').addEventListener('click', async () => {
     if (confirm('PERINGATAN: Apakah Anda benar-benar ingin menghapus seluruh data barang dan transaksi? Tindakan ini tidak dapat dibatalkan.')) {
-      state.products = [];
-      state.transactions = [];
-      saveToLocalStorage();
-      
-      renderProducts();
-      renderTransactions();
-      renderDashboardSummary();
-      renderCharts();
-      
+      if (isSupabaseMode) {
+        setLoadingOverlay(true);
+        // Hapus semua transaksi dulu (ada foreign key ke produk)
+        await supabaseClient.from('transaksi').delete().neq('id_transaksi', '');
+        await supabaseClient.from('produk').delete().neq('id_produk', '');
+        await loadProductsFromSupabase();
+        await loadTransactionsFromSupabase();
+        setLoadingOverlay(false);
+      } else {
+        state.products = [];
+        state.transactions = [];
+      }
+      refreshAllViews();
       showToast('Seluruh data berhasil dihapus!', 'trash-2');
     }
   });
@@ -1092,11 +1373,31 @@ function initSettingsActions() {
 // ==========================================================================
 // INITIAL SETUP ON CONTENT LOAD
 // ==========================================================================
-document.addEventListener('DOMContentLoaded', () => {
-  // 1. Initial State Load
-  loadFromLocalStorage();
+async function loadEnvConfig() {
+  // Prioritas 1: window.__env sudah diisi (dev lokal atau inject manual)
+  if (window.__env && window.__env.SUPABASE_URL && window.__env.SUPABASE_ANON_KEY) {
+    return;
+  }
+  // Prioritas 2: Fetch dari /api/env (Vercel serverless function)
+  try {
+    const res = await fetch('/api/env');
+    if (res.ok) {
+      const envData = await res.json();
+      window.__env = window.__env || {};
+      window.__env.SUPABASE_URL = envData.SUPABASE_URL || '';
+      window.__env.SUPABASE_ANON_KEY = envData.SUPABASE_ANON_KEY || '';
+      console.info('[Env] Konfigurasi berhasil dimuat dari /api/env');
+    }
+  } catch (err) {
+    console.warn('[Env] Tidak dapat memuat /api/env, menggunakan fallback:', err.message);
+  }
+}
 
-  // 2. Setup Modules UI
+document.addEventListener('DOMContentLoaded', async () => {
+  // 1. Load saved theme
+  loadThemeFromLocalStorage();
+
+  // 2. Setup UI Modules
   initTheme();
   initTabs();
   initAutoSaleDialog();
@@ -1104,15 +1405,39 @@ document.addEventListener('DOMContentLoaded', () => {
   initTransactionForm();
   initSettingsActions();
 
-  // 3. Render View Elements
+  // 3. Load env config (fetch dari /api/env jika di Vercel)
+  await loadEnvConfig();
+
+  // 4. Try to initialize Supabase
+  isSupabaseMode = initSupabase();
+
+  if (isSupabaseMode) {
+    // 4a. Load data from Supabase
+    setLoadingOverlay(true);
+    const produkOK = await loadProductsFromSupabase();
+    const transaksiOK = await loadTransactionsFromSupabase();
+    setLoadingOverlay(false);
+
+    if (!produkOK || !transaksiOK) {
+      // Fallback ke demo data jika Supabase gagal
+      showToast('Koneksi Supabase gagal, menggunakan data demo', 'wifi-off');
+      loadDemoData();
+    } else {
+      showToast('Terhubung ke Supabase ✓', 'database');
+    }
+  } else {
+    // 4b. Fallback: load demo data (no Supabase config)
+    loadDemoData();
+    showToast('Mode offline aktif — konfigurasi Supabase belum diisi', 'wifi-off');
+  }
+
+  // 5. Render semua view
   renderDashboardSummary();
   renderProducts();
   renderTransactions();
-  
-  // Render Chart.js items
   renderCharts();
 
-  // 4. Initial Icon Rendering
+  // 6. Initial Icon Rendering
   if (window.lucide) {
     lucide.createIcons();
   }

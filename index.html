@@ -15,6 +15,9 @@
   
   <!-- Chart.js CDN -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <!-- Supabase JS Client CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
 
@@ -443,6 +446,20 @@
 
   <!-- Lucide Icons Script -->
   <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- Supabase Environment Config -->
+  <!-- CATATAN: Nilai SUPABASE_URL dan SUPABASE_ANON_KEY harus diisi di Vercel -->
+  <!-- Environment Variables → Settings → Environment Variables di Vercel Dashboard -->
+  <script id="supabase-config">
+    // Vercel otomatis menginjeksi env vars ke window via build process
+    // Untuk static site, kita simpan sebagai window.__env
+    window.__env = window.__env || {};
+    // Fallback: jika tidak ada env dari Vercel, gunakan placeholder
+    // Ini akan diganti oleh nilai asli saat deploy ke Vercel
+    window.__env.SUPABASE_URL = window.__env.SUPABASE_URL || '';
+    window.__env.SUPABASE_ANON_KEY = window.__env.SUPABASE_ANON_KEY || '';
+  </script>
+
   <!-- Main Logic Script -->
   <script src="app.js"></script>
 </body>
